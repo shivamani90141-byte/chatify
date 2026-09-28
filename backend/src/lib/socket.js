@@ -5,6 +5,7 @@ import { ENV } from "./env.js";
 import { socketAuthMiddleware } from "../middleware/socket.auth.middleware.js";
 
 const app = express();
+
 const server = http.createServer(app);
 
 const io = new Server(server, {
@@ -14,31 +15,66 @@ const io = new Server(server, {
   },
 });
 
-// apply authentication middleware to all socket connections
 io.use(socketAuthMiddleware);
 
-// we will use this function to check if the user is online or not
+// Stores multiple socket connections for each user
+// { userId: Set(socketId1, socketId2, ...) }
+const userSocketMap = {};
+
+// Get socket IDs of a user
 export function getReceiverSocketId(userId) {
-  return userSocketMap[userId];
+  return userSocketMap[userId]
+    ? [...userSocketMap[userId]]
+    : [];
 }
 
-// this is for storig online users
-const userSocketMap = {}; // {userId:socketId}
-
 io.on("connection", (socket) => {
-  console.log("A user connected", socket.user.fullName);
+  console.log(
+    "A user connected:",
+    socket.user.fullName,
+    `(${socket.id})`
+  );
 
   const userId = socket.userId;
-  userSocketMap[userId] = socket.id;
 
-  // io.emit() is used to send events to all connected clients
-  io.emit("getOnlineUsers", Object.keys(userSocketMap));
+  // Create a Set for this user if it doesn't exist
+  if (!userSocketMap[userId]) {
+    userSocketMap[userId] = new Set();
+  }
 
-  // with socket.on we listen for events from clients
+  // Add this socket
+  userSocketMap[userId].add(socket.id);
+
+  // Send currently online users to everyone
+  io.emit(
+    "getOnlineUsers",
+    Object.keys(userSocketMap)
+  );
+
   socket.on("disconnect", () => {
-    console.log("A user disconnected", socket.user.fullName);
-    delete userSocketMap[userId];
-    io.emit("getOnlineUsers", Object.keys(userSocketMap));
+    console.log(
+      "A user disconnected:",
+      socket.user.fullName,
+      `(${socket.id})`
+    );
+
+    // Remove this socket
+    userSocketMap[userId]?.delete(socket.id);
+
+    // If the user has no remaining connections,
+    // remove the user completely
+    if (
+      userSocketMap[userId] &&
+      userSocketMap[userId].size === 0
+    ) {
+      delete userSocketMap[userId];
+    }
+
+    // Update everyone
+    io.emit(
+      "getOnlineUsers",
+      Object.keys(userSocketMap)
+    );
   });
 });
 
